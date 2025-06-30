@@ -83,6 +83,7 @@ try {
     };
 
     const searchUrl = `https://www.fiverr.com/search/gigs?query=${encodeURIComponent(keyword)}${sortMapping[sortBy]}`;
+    console.log(`Search URL: ${searchUrl}`);
     
     const startUrls = [{ url: searchUrl, label: 'search_results' }];
 
@@ -109,19 +110,39 @@ try {
     const dataset = await Dataset.open();
     const { items: gigs } = await dataset.getData();
 
-    // Apply review count filters
-    const filteredGigs = gigs.filter((gig: Gig) => {
-        const reviewCount = gig.reviewCount || 0;
-        if (reviewCount < minReviews) return false;
-        if (maxReviews && reviewCount > maxReviews) return false;
-        return true;
-    });
+    console.log(`Total gigs retrieved from dataset: ${gigs.length}`);
+
+    // TEMPORARILY DISABLED: Apply review count filters for debugging
+    // const filteredGigs = gigs.filter((gig: Gig) => {
+    //     const reviewCount = gig.reviewCount || 0;
+    //     if (reviewCount < minReviews) return false;
+    //     if (maxReviews && reviewCount > maxReviews) return false;
+    //     return true;
+    // });
+
+    // For debugging, use all gigs without filtering
+    const filteredGigs = gigs;
+    console.log(`Gigs after filtering (currently disabled): ${filteredGigs.length}`);
+
+    // Debug: Log details of first few gigs
+    if (filteredGigs.length > 0) {
+        console.log('Sample gig data:');
+        filteredGigs.slice(0, 3).forEach((gig: Gig, index: number) => {
+            console.log(`Gig ${index + 1}:`, {
+                title: gig.title?.substring(0, 50) + '...',
+                rating: gig.rating,
+                reviewCount: gig.reviewCount,
+                price: gig.price,
+                seller: gig.seller
+            });
+        });
+    }
 
     const output: ScraperOutput = {
         gigs: filteredGigs,
         totalResults: filteredGigs.length,
         success: true,
-        message: `Successfully scraped ${filteredGigs.length} gigs for keyword "${keyword}"`
+        message: `Successfully scraped ${filteredGigs.length} gigs for keyword "${keyword}" (filtering temporarily disabled for debugging)`
     };
 
     console.log(`Scraping completed successfully. Found ${filteredGigs.length} gigs.`);
