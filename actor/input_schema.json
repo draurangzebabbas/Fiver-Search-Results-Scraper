@@ -1,24 +1,44 @@
 {
-    "title": "PlaywrightCrawler Template",
+    "title": "Fiverr Scraper",
     "type": "object",
     "schemaVersion": 1,
     "properties": {
-        "startUrls": {
-            "title": "Start URLs",
-            "type": "array",
-            "description": "URLs to start with.",
-            "editor": "requestListSources",
-            "prefill": [
-                {
-                    "url": "https://apify.com"
-                }
-            ]
+        "keyword": {
+            "title": "Search Keyword",
+            "type": "string",
+            "description": "The search term to look for on Fiverr (e.g., 'logo design', 'web development')",
+            "editor": "textfield",
+            "example": "logo design"
         },
-        "maxRequestsPerCrawl": {
-            "title": "Max Requests per Crawl",
+        "minReviews": {
+            "title": "Minimum Reviews",
             "type": "integer",
-            "description": "Maximum number of requests that can be made by this crawler.",
-            "default": 100
+            "description": "Minimum number of reviews a gig should have",
+            "default": 0,
+            "minimum": 0
+        },
+        "maxReviews": {
+            "title": "Maximum Reviews",
+            "type": "integer",
+            "description": "Maximum number of reviews a gig should have (leave empty for no limit)",
+            "minimum": 0
+        },
+        "pages": {
+            "title": "Number of Pages",
+            "type": "integer",
+            "description": "Number of pages to scrape",
+            "default": 1,
+            "minimum": 1,
+            "maximum": 10
+        },
+        "sortBy": {
+            "title": "Sort By",
+            "type": "string",
+            "description": "How to sort the search results",
+            "default": "relevance",
+            "enum": ["relevance", "rating", "reviews", "price_low", "price_high"],
+            "enumTitles": ["Relevance", "Rating", "Reviews", "Price (Low to High)", "Price (High to Low)"]
         }
-    }
+    },
+    "required": ["keyword"]
 }

@@ -1,56 +1,147 @@
 /**
- * This template is a production ready boilerplate for developing with `PlaywrightCrawler`.
- * Use this to bootstrap your projects using the most up-to-date code.
- * If you're looking for examples or want to learn more, see README.
+ * Fiverr Scraper Actor
+ * Scrapes Fiverr gigs based on search criteria and filters
  */
 
-// For more information, see https://docs.apify.com/sdk/js
 import { Actor } from 'apify';
 import { launchOptions as camoufoxLaunchOptions } from 'camoufox-js';
-// For more information, see https://crawlee.dev
-import { PlaywrightCrawler } from 'crawlee';
+import { PlaywrightCrawler, Dataset } from 'crawlee';
 import { firefox } from 'playwright';
 
-// this is ESM project, and as such, it requires you to specify extensions in your relative imports
-// read more about this here: https://nodejs.org/docs/latest-v18.x/api/esm.html#mandatory-file-extensions
-// note that we need to use `.js` even when inside TS files
 import { router } from './routes.js';
 
 interface Input {
-    startUrls: {
-        url: string;
-        method?: 'GET' | 'HEAD' | 'POST' | 'PUT' | 'DELETE' | 'TRACE' | 'OPTIONS' | 'CONNECT' | 'PATCH';
-        headers?: Record<string, string>;
-        userData: Record<string, unknown>;
-    }[];
-    maxRequestsPerCrawl: number;
+    keyword: string;
+    minReviews?: number;
+    maxReviews?: number;
+    pages?: number;
+    sortBy?: 'relevance' | 'rating' | 'reviews' | 'price_low' | 'price_high';
+}
+
+interface Gig {
+    id: string;
+    title: string;
+    link: string;
+    rating: number;
+    reviewCount: number;
+    price: string;
+    seller: string;
+    sellerLevel: string;
+    thumbnail: string;
+    tags: string[];
+}
+
+interface ScraperOutput {
+    gigs: Gig[];
+    totalResults: number;
+    success: boolean;
+    error?: string;
+    message: string;
 }
 
 // Initialize the Apify SDK
 await Actor.init();
 
-// Structure of input is defined in input_schema.json
-const { startUrls = ['https://apify.com'], maxRequestsPerCrawl = 100 } =
-    (await Actor.getInput<Input>()) ?? ({} as Input);
+try {
+    // Structure of input is defined in input_schema.json
+    const input = await Actor.getInput<Input>();
+    
+    if (!input || !input.keyword) {
+        throw new Error('Keyword is required');
+    }
 
-const proxyConfiguration = await Actor.createProxyConfiguration();
+    const {
+        keyword,
+        minReviews = 0,
+        maxReviews,
+        pages = 1,
+        sortBy = 'relevance'
+    } = input;
 
-const crawler = new PlaywrightCrawler({
-    proxyConfiguration,
-    maxRequestsPerCrawl,
-    requestHandler: router,
-    launchContext: {
-        launcher: firefox,
-        launchOptions: await camoufoxLaunchOptions({
-            headless: true,
-            proxy: await proxyConfiguration?.newUrl(),
-            geoip: true,
-            // fonts: ['Times New Roman'] // <- custom Camoufox options
-        }),
-    },
-});
+    console.log(`Starting Fiverr scraper with keyword: "${keyword}"`);
+    console.log(`Pages to scrape: ${pages}, Sort by: ${sortBy}`);
+    console.log(`Review filters - Min: ${minReviews}, Max: ${maxReviews || 'unlimited'}`);
 
-await crawler.run(startUrls);
+    // Store input parameters in Actor's key-value store for access in routes
+    await Actor.setValue('INPUT_PARAMS', {
+        keyword,
+        minReviews,
+        maxReviews,
+        pages,
+        sortBy
+    });
+
+    const proxyConfiguration = await Actor.createProxyConfiguration();
+
+    // Construct Fiverr search URL
+    const sortMapping = {
+        'relevance': '',
+        'rating': '&rating=4',
+        'reviews': '&sort=reviews',
+        'price_low': '&sort=price',
+        'price_high': '&sort=price_desc'
+    };
+
+    const searchUrl = `https://www.fiverr.com/search/gigs?query=${encodeURIComponent(keyword)}${sortMapping[sortBy]}`;
+    
+    const startUrls = [{ url: searchUrl, label: 'search_results' }];
+
+    const crawler = new PlaywrightCrawler({
+        proxyConfiguration,
+        maxRequestsPerCrawl: pages * 10, // Allow for pagination and potential retries
+        requestHandler: router,
+        launchContext: {
+            launcher: firefox,
+            launchOptions: await camoufoxLaunchOptions({
+                headless: true,
+                proxy: await proxyConfiguration?.newUrl(),
+                geoip: true,
+            }),
+        },
+        // Add delays to be respectful to the target site
+        maxConcurrency: 1,
+        requestHandlerTimeoutSecs: 60,
+    });
+
+    await crawler.run(startUrls);
+
+    // Retrieve scraped data from dataset
+    const dataset = await Dataset.open();
+    const { items: gigs } = await dataset.getData();
+
+    // Apply review count filters
+    const filteredGigs = gigs.filter((gig: Gig) => {
+        const reviewCount = gig.reviewCount || 0;
+        if (reviewCount < minReviews) return false;
+        if (maxReviews && reviewCount > maxReviews) return false;
+        return true;
+    });
+
+    const output: ScraperOutput = {
+        gigs: filteredGigs,
+        totalResults: filteredGigs.length,
+        success: true,
+        message: `Successfully scraped ${filteredGigs.length} gigs for keyword "${keyword}"`
+    };
+
+    console.log(`Scraping completed successfully. Found ${filteredGigs.length} gigs.`);
+    
+    // Save the final output
+    await Actor.setValue('OUTPUT', output);
+
+} catch (error) {
+    console.error('Error during scraping:', error);
+    
+    const errorOutput: ScraperOutput = {
+        gigs: [],
+        totalResults: 0,
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error occurred',
+        message: 'Scraping failed due to an error'
+    };
+    
+    await Actor.setValue('OUTPUT', errorOutput);
+}
 
 // Exit successfully
 await Actor.exit();
