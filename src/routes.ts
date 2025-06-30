@@ -257,9 +257,36 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks, s
             }
         }
 
-        // Extract gig data from the current page with enhanced error handling
-        const gigs = await page.evaluate((selector) => {
+        // Extract gig data from the current page with enhanced error handling and validation
+        const gigs = await page.evaluate((selector, keyword) => {
             console.log('Starting gig extraction with selector:', selector);
+            
+            // Helper function to clean text (from Supabase function)
+            function cleanText(text: string): string {
+                return text
+                    .replace(/&amp;/g, '&')
+                    .replace(/&lt;/g, '<')
+                    .replace(/&gt;/g, '>')
+                    .replace(/&quot;/g, '"')
+                    .replace(/&#39;/g, "'")
+                    .replace(/\s+/g, ' ')
+                    .trim();
+            }
+
+            // Helper function to generate tags (from Supabase function)
+            function generateTags(title: string, keyword: string): string[] {
+                const commonTags = ['SEO', 'Marketing', 'Content', 'Writing', 'Digital', 'Professional', 'Quality'];
+                const keywordTags = keyword.split(' ').map(word => 
+                    word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+                );
+                
+                const titleWords = title.toLowerCase().split(' ');
+                const relevantTags = commonTags.filter(tag => 
+                    titleWords.some(word => word.includes(tag.toLowerCase()))
+                );
+
+                return [...new Set([...keywordTags, ...relevantTags])].slice(0, 4);
+            }
             
             const gigElements = document.querySelectorAll(selector || '[data-gig-id], .gig-card-layout, .gig-wrapper, .gig-card');
             console.log(`Found ${gigElements.length} gig elements`);
@@ -280,56 +307,86 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks, s
                 try {
                     console.log(`Processing gig element ${index + 1}/${gigElements.length}`);
                     
-                    // Enhanced title extraction
+                    // Enhanced title extraction with multiple patterns (from Supabase function)
                     const titleSelectors = [
                         'h3 a', 'h2 a', 'h4 a',
                         '.gig-title a',
                         '[data-gig-title] a',
                         'a[data-impression-collected]',
                         '.gig-link',
-                        'a[href*="/gigs/"]'
+                        'a[href*="/gigs/"]',
+                        '[data-impression-gig-title]'
                     ];
                     
                     let titleElement: Element | null = null;
                     let title = '';
                     let link = '';
                     
-                    for (const selector of titleSelectors) {
-                        titleElement = gigElement.querySelector(selector);
-                        if (titleElement) {
-                            title = titleElement.textContent?.trim() || '';
-                            link = titleElement.getAttribute('href') || '';
-                            if (title && link) {
-                                console.log(`Found title with selector ${selector}: ${title.substring(0, 50)}...`);
-                                break;
+                    // Try data attribute first
+                    const dataTitle = gigElement.getAttribute('data-impression-gig-title');
+                    if (dataTitle && dataTitle.trim().length > 5) {
+                        title = cleanText(dataTitle);
+                        console.log(`Found title from data attribute: ${title.substring(0, 50)}...`);
+                    }
+                    
+                    // If no data title, try selectors
+                    if (!title) {
+                        for (const selector of titleSelectors) {
+                            titleElement = gigElement.querySelector(selector);
+                            if (titleElement) {
+                                title = titleElement.textContent?.trim() || '';
+                                link = titleElement.getAttribute('href') || '';
+                                if (title && title.length > 5) {
+                                    title = cleanText(title);
+                                    console.log(`Found title with selector ${selector}: ${title.substring(0, 50)}...`);
+                                    break;
+                                }
                             }
                         }
                     }
                     
-                    if (!title || !link) {
-                        console.log(`No title/link found for element ${index}, skipping`);
+                    // Extract link if not found yet
+                    if (!link && titleElement) {
+                        link = titleElement.getAttribute('href') || '';
+                    }
+                    
+                    // Try to find link separately if still not found
+                    if (!link) {
+                        const linkElement = gigElement.querySelector('a[href*="/gigs/"]');
+                        if (linkElement) {
+                            link = linkElement.getAttribute('href') || '';
+                        }
+                    }
+                    
+                    // Strict validation: Skip if no title or link (from Supabase function logic)
+                    if (!title || title.length < 5 || !link) {
+                        console.log(`No valid title/link found for element ${index}, skipping`);
                         return;
                     }
                     
-                    // Enhanced rating extraction
+                    // Enhanced rating extraction with validation (from Supabase function)
                     const ratingSelectors = [
                         '.rating-score', '.star-rating-score',
                         '[data-rating]', '.gig-rating',
                         '.rating-wrapper span',
                         '.rating span',
-                        '[aria-label*="star"]'
+                        '[aria-label*="star"]',
+                        '.stars-rating',
+                        '.rating-text'
                     ];
                     
                     let rating = 0;
-                    for (const selector of ratingSelectors) {
-                        const ratingElement = gigElement.querySelector(selector);
+                    for (const ratingSelector of ratingSelectors) {
+                        const ratingElement = gigElement.querySelector(ratingSelector);
                         if (ratingElement) {
                             const ratingText = ratingElement.textContent?.trim() || 
-                                             ratingElement.getAttribute('aria-label') || '0';
+                                             ratingElement.getAttribute('aria-label') || 
+                                             ratingElement.getAttribute('data-rating') || '0';
                             const ratingMatch = ratingText.match(/(\d+\.?\d*)/);
                             if (ratingMatch) {
-                                rating = parseFloat(ratingMatch[1]) || 0;
-                                if (rating > 0) {
+                                const parsedRating = parseFloat(ratingMatch[1]);
+                                if (parsedRating >= 1 && parsedRating <= 5) {
+                                    rating = Math.round(parsedRating * 10) / 10;
                                     console.log(`Found rating: ${rating}`);
                                     break;
                                 }
@@ -337,24 +394,33 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks, s
                         }
                     }
                     
-                    // Enhanced review count extraction
+                    // Strict validation: Skip if no valid rating (from Supabase function logic)
+                    if (rating === 0) {
+                        console.log(`No valid rating found for element ${index}, skipping`);
+                        return;
+                    }
+                    
+                    // Enhanced review count extraction with validation (from Supabase function)
                     const reviewSelectors = [
                         '.rating-count', '.reviews-count',
                         '[data-reviews-count]',
                         '.rating-wrapper .count',
                         '.review-count',
-                        '[class*="review"]'
+                        '[class*="review"]',
+                        '.rating-text'
                     ];
                     
                     let reviewCount = 0;
-                    for (const selector of reviewSelectors) {
-                        const reviewElement = gigElement.querySelector(selector);
+                    for (const reviewSelector of reviewSelectors) {
+                        const reviewElement = gigElement.querySelector(reviewSelector);
                         if (reviewElement) {
                             const reviewText = reviewElement.textContent?.trim() || '0';
-                            const reviewMatch = reviewText.match(/(\d+)/);
+                            // Look for patterns like "(123)" or "123 reviews"
+                            const reviewMatch = reviewText.match(/\(?(\d+)\)?/);
                             if (reviewMatch) {
-                                reviewCount = parseInt(reviewMatch[1]) || 0;
-                                if (reviewCount > 0) {
+                                const parsedCount = parseInt(reviewMatch[1]);
+                                if (parsedCount > 0 && parsedCount < 50000) { // Reasonable upper limit
+                                    reviewCount = parsedCount;
                                     console.log(`Found review count: ${reviewCount}`);
                                     break;
                                 }
@@ -362,74 +428,151 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks, s
                         }
                     }
 
-                    // Enhanced price extraction
+                    // Strict validation: Skip if no valid review count (from Supabase function logic)
+                    if (reviewCount === 0) {
+                        console.log(`No valid review count found for element ${index}, skipping`);
+                        return;
+                    }
+
+                    // Enhanced price extraction with validation (from Supabase function)
                     const priceSelectors = [
                         '.price', '.gig-price',
                         '[data-price]', '.price-wrapper',
                         '.starting-at', '.price-display',
-                        '[class*="price"]'
+                        '[class*="price"]',
+                        '.package-price'
                     ];
                     
                     let price = '';
-                    for (const selector of priceSelectors) {
-                        const priceElement = gigElement.querySelector(selector);
+                    for (const priceSelector of priceSelectors) {
+                        const priceElement = gigElement.querySelector(priceSelector);
                         if (priceElement) {
-                            price = priceElement.textContent?.trim() || '';
-                            if (price && (price.includes('$') || price.includes('€') || price.includes('£'))) {
-                                console.log(`Found price: ${price}`);
-                                break;
+                            const priceText = priceElement.textContent?.trim() || '';
+                            if (priceText && (priceText.includes('$') || priceText.includes('€') || priceText.includes('£'))) {
+                                // Extract price number and validate
+                                const priceMatch = priceText.match(/[\$€£](\d+)/);
+                                if (priceMatch) {
+                                    const priceNum = parseInt(priceMatch[1]);
+                                    if (priceNum > 0 && priceNum < 10000) { // Reasonable price range
+                                        price = priceText.includes('From') ? priceText : `From ${priceText}`;
+                                        console.log(`Found price: ${price}`);
+                                        break;
+                                    }
+                                }
                             }
                         }
                     }
 
-                    // Enhanced seller extraction
+                    // Strict validation: Skip if no valid price (from Supabase function logic)
+                    if (!price) {
+                        console.log(`No valid price found for element ${index}, skipping`);
+                        return;
+                    }
+
+                    // Enhanced seller extraction with validation (from Supabase function)
                     const sellerSelectors = [
                         '.seller-name', '.username',
                         '[data-seller]', '.seller-info .name',
-                        '.seller-link', '[class*="seller"]'
+                        '.seller-link', '[class*="seller"]',
+                        '.user-name', '.profile-name'
                     ];
                     
                     let seller = '';
-                    for (const selector of sellerSelectors) {
-                        const sellerElement = gigElement.querySelector(selector);
+                    for (const sellerSelector of sellerSelectors) {
+                        const sellerElement = gigElement.querySelector(sellerSelector);
                         if (sellerElement) {
-                            seller = sellerElement.textContent?.trim() || '';
-                            if (seller) {
+                            const sellerText = sellerElement.textContent?.trim() || '';
+                            if (sellerText && sellerText.length > 1 && sellerText.length < 50) {
+                                seller = cleanText(sellerText);
                                 console.log(`Found seller: ${seller}`);
                                 break;
                             }
                         }
                     }
                     
-                    const sellerLevelElement = gigElement.querySelector('.seller-level, [data-seller-level], [class*="level"]');
-                    const sellerLevel = sellerLevelElement?.textContent?.trim() || '';
+                    // Strict validation: Skip if no valid seller (from Supabase function logic)
+                    if (!seller) {
+                        console.log(`No valid seller found for element ${index}, skipping`);
+                        return;
+                    }
+                    
+                    // Extract seller level with fallback
+                    const levelSelectors = [
+                        '.seller-level', '[data-seller-level]',
+                        '[class*="level"]', '.badge',
+                        '.seller-badge'
+                    ];
+                    
+                    let sellerLevel = 'Level 1'; // Default fallback
+                    for (const levelSelector of levelSelectors) {
+                        const levelElement = gigElement.querySelector(levelSelector);
+                        if (levelElement) {
+                            const levelText = levelElement.textContent?.trim() || '';
+                            if (levelText && (levelText.includes('Level') || levelText.includes('Pro') || levelText.includes('Top'))) {
+                                sellerLevel = cleanText(levelText);
+                                break;
+                            }
+                        }
+                    }
 
-                    // Extract thumbnail
-                    const thumbnailElement = gigElement.querySelector('img');
-                    const thumbnail = thumbnailElement?.getAttribute('src') || 
-                                    thumbnailElement?.getAttribute('data-src') || 
-                                    thumbnailElement?.getAttribute('data-lazy-src') || '';
+                    // Enhanced thumbnail extraction with validation (from Supabase function)
+                    const imgSelectors = [
+                        'img[src]',
+                        'img[data-src]',
+                        'img[data-lazy-src]',
+                        '[style*="background-image"]'
+                    ];
+                    
+                    let thumbnail = '';
+                    for (const imgSelector of imgSelectors) {
+                        const imgElement = gigElement.querySelector(imgSelector);
+                        if (imgElement) {
+                            let imgUrl = imgElement.getAttribute('src') || 
+                                        imgElement.getAttribute('data-src') || 
+                                        imgElement.getAttribute('data-lazy-src') || '';
+                            
+                            // Try background image if no src found
+                            if (!imgUrl && imgElement.getAttribute('style')) {
+                                const styleMatch = imgElement.getAttribute('style')?.match(/background-image:\s*url\(['"]?([^'"]+)['"]?\)/);
+                                if (styleMatch) {
+                                    imgUrl = styleMatch[1];
+                                }
+                            }
+                            
+                            if (imgUrl && (imgUrl.startsWith('http') || imgUrl.startsWith('//'))) {
+                                thumbnail = imgUrl.startsWith('http') ? imgUrl : `https:${imgUrl}`;
+                                console.log(`Found thumbnail: ${thumbnail.substring(0, 50)}...`);
+                                break;
+                            }
+                        }
+                    }
 
-                    // Extract tags
-                    const tagElements = gigElement.querySelectorAll('.tag, .gig-tag, [data-tag], [class*="tag"]');
-                    const tags = Array.from(tagElements).map(tag => tag.textContent?.trim() || '').filter(Boolean);
+                    // Strict validation: Skip if no valid thumbnail (from Supabase function logic)
+                    if (!thumbnail) {
+                        console.log(`No valid thumbnail found for element ${index}, skipping`);
+                        return;
+                    }
 
                     // Generate ID
-                    const id = gigElement.getAttribute('data-gig-id') || 
-                              gigElement.getAttribute('data-gig') || 
-                              `gig-${Date.now()}-${index}`;
+                    const gigId = gigElement.getAttribute('data-gig-id') || 
+                                 gigElement.getAttribute('data-gig') || 
+                                 `gig-${Date.now()}-${index}-${Math.random().toString(36).substr(2, 9)}`;
 
-                    console.log(`Extracted gig data:`, {
+                    // Generate tags using the helper function
+                    const tags = generateTags(title, keyword);
+
+                    console.log(`Successfully extracted gig data:`, {
                         title: title.substring(0, 30) + '...',
                         link: link.substring(0, 50) + '...',
                         rating,
                         reviewCount,
                         price,
-                        seller
+                        seller,
+                        thumbnail: thumbnail.substring(0, 30) + '...'
                     });
 
                     extractedGigs.push({
-                        id,
+                        id: gigId,
                         title,
                         link: link.startsWith('http') ? link : `https://www.fiverr.com${link}`,
                         rating,
@@ -437,7 +580,7 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks, s
                         price,
                         seller,
                         sellerLevel,
-                        thumbnail: thumbnail.startsWith('http') ? thumbnail : (thumbnail ? `https:${thumbnail}` : ''),
+                        thumbnail,
                         tags
                     });
                     
@@ -448,7 +591,7 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks, s
 
             console.log(`Total extracted gigs: ${extractedGigs.length}`);
             return extractedGigs;
-        }, workingSelector);
+        }, workingSelector, inputParams.keyword);
 
         log.info(`Extracted ${gigs.length} gigs from page ${currentPage}`);
         
