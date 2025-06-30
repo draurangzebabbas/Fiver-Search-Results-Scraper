@@ -111,25 +111,45 @@ try {
                     '--disable-renderer-backgrounding',
                     '--disable-features=TranslateUI',
                     '--disable-ipc-flooding-protection',
+                    '--disable-blink-features=AutomationControlled',
+                    '--disable-extensions',
+                    '--disable-plugins',
+                    '--disable-images',
+                    '--disable-javascript',
+                    '--disable-default-apps',
+                    '--disable-sync',
+                    '--disable-translate',
+                    '--hide-scrollbars',
+                    '--mute-audio',
+                    '--no-default-browser-check',
+                    '--no-first-run',
+                    '--disable-logging',
+                    '--disable-permissions-api',
+                    '--disable-presentation-api',
+                    '--disable-print-preview',
+                    '--disable-speech-api',
+                    '--disable-file-system',
+                    '--disable-sensors',
+                    '--disable-geolocation',
+                    '--disable-notifications'
                 ],
             }),
         },
-        // Enhanced settings for stealth
+        // Enhanced settings for stealth - removed duplicate maxConcurrency
         maxConcurrency: 1,
-        requestHandlerTimeoutSecs: 120, // Increased timeout
-        navigationTimeoutSecs: 60,
+        requestHandlerTimeoutSecs: 180, // Increased timeout
+        navigationTimeoutSecs: 90,
         // Add session pool for better request management
         sessionPoolOptions: {
-            maxPoolSize: 10,
+            maxPoolSize: 20,
             sessionOptions: {
-                maxUsageCount: 50,
+                maxUsageCount: 30,
             },
         },
         // Add retry logic
-        maxRequestRetries: 5,
+        maxRequestRetries: 8,
         // Add delays between requests
         minConcurrency: 1,
-        maxConcurrency: 1,
     });
 
     await crawler.run(startUrls);

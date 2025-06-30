@@ -24,6 +24,13 @@ interface InputParams {
     sortBy: string;
 }
 
+// Extend Window interface to include chrome property
+declare global {
+    interface Window {
+        chrome: any;
+    }
+}
+
 let currentPage = 1;
 
 router.addHandler('search_results', async ({ request, page, log, enqueueLinks, session }) => {
@@ -51,18 +58,56 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks, s
                 get: () => ['en-US', 'en'],
             });
 
-            // Mock permissions
+            // Mock permissions - fix the type issue
             const originalQuery = window.navigator.permissions.query;
-            window.navigator.permissions.query = (parameters) => (
-                parameters.name === 'notifications' ?
-                    Promise.resolve({ state: Notification.permission }) :
-                    originalQuery(parameters)
-            );
+            window.navigator.permissions.query = (parameters: PermissionDescriptor): Promise<PermissionStatus> => {
+                if (parameters.name === 'notifications') {
+                    return Promise.resolve({
+                        state: Notification.permission,
+                        name: parameters.name,
+                        onchange: null,
+                        addEventListener: () => {},
+                        removeEventListener: () => {},
+                        dispatchEvent: () => false
+                    } as PermissionStatus);
+                }
+                return originalQuery.call(window.navigator.permissions, parameters);
+            };
 
-            // Mock chrome object
-            window.chrome = {
+            // Mock chrome object - fix the type issue
+            (window as any).chrome = {
                 runtime: {},
             };
+
+            // Additional stealth measures
+            Object.defineProperty(navigator, 'hardwareConcurrency', {
+                get: () => 4,
+            });
+
+            Object.defineProperty(navigator, 'deviceMemory', {
+                get: () => 8,
+            });
+
+            // Mock screen properties
+            Object.defineProperty(screen, 'availHeight', {
+                get: () => 1040,
+            });
+
+            Object.defineProperty(screen, 'availWidth', {
+                get: () => 1920,
+            });
+
+            // Remove automation indicators
+            delete (navigator as any).webdriver;
+            
+            // Mock connection
+            Object.defineProperty(navigator, 'connection', {
+                get: () => ({
+                    effectiveType: '4g',
+                    rtt: 50,
+                    downlink: 10,
+                }),
+            });
         });
 
         // Set realistic headers
@@ -78,6 +123,7 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks, s
             'Sec-Fetch-Site': 'none',
             'Sec-Fetch-User': '?1',
             'Cache-Control': 'max-age=0',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         });
 
         // Set viewport to common desktop size
@@ -87,15 +133,15 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks, s
         log.info(`Navigating to: ${request.url}`);
         
         // Add random delay before navigation
-        await page.waitForTimeout(Math.random() * 3000 + 2000);
+        await page.waitForTimeout(Math.random() * 5000 + 3000);
         
         try {
             // Wait for page to load with increased timeout
-            await page.waitForLoadState('domcontentloaded', { timeout: 60000 });
+            await page.waitForLoadState('domcontentloaded', { timeout: 90000 });
             log.info('Page DOM content loaded');
             
             // Wait for network to be idle
-            await page.waitForLoadState('networkidle', { timeout: 30000 });
+            await page.waitForLoadState('networkidle', { timeout: 45000 });
             log.info('Page network idle');
             
         } catch (loadError) {
@@ -103,7 +149,7 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks, s
         }
 
         // Additional wait for dynamic content
-        await page.waitForTimeout(5000);
+        await page.waitForTimeout(8000);
 
         // Check if we're blocked or redirected
         const currentUrl = page.url();
@@ -113,7 +159,7 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks, s
 
         // Check for common blocking indicators
         const bodyText = await page.evaluate(() => document.body.innerText.toLowerCase());
-        const blockingKeywords = ['blocked', 'access denied', 'forbidden', 'captcha', 'security check'];
+        const blockingKeywords = ['blocked', 'access denied', 'forbidden', 'captcha', 'security check', 'bot detected'];
         const isBlocked = blockingKeywords.some(keyword => bodyText.includes(keyword));
         
         if (isBlocked) {
@@ -128,7 +174,7 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks, s
 
         // Simulate human-like scrolling
         await page.evaluate(async () => {
-            await new Promise((resolve) => {
+            await new Promise<void>((resolve) => {
                 let totalHeight = 0;
                 const distance = 100;
                 const timer = setInterval(() => {
@@ -138,9 +184,9 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks, s
 
                     if(totalHeight >= scrollHeight){
                         clearInterval(timer);
-                        resolve(null);
+                        resolve();
                     }
-                }, 100);
+                }, 150);
             });
         });
 
@@ -154,7 +200,9 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks, s
             '.basic-gig-card',
             '.gig-card-footer-wrapper',
             '[data-testid="gig-card"]',
-            '.gig-card-container'
+            '.gig-card-container',
+            '.gig-card-item',
+            '[data-cy="gig-card"]'
         ];
 
         let gigElementsFound = false;
@@ -162,7 +210,7 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks, s
         
         for (const selector of possibleSelectors) {
             try {
-                await page.waitForSelector(selector, { timeout: 10000 });
+                await page.waitForSelector(selector, { timeout: 15000 });
                 const elementCount = await page.locator(selector).count();
                 if (elementCount > 0) {
                     log.info(`Found ${elementCount} elements with selector: ${selector}`);
@@ -187,7 +235,9 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks, s
                 '.cookie-consent',
                 '.gdpr-banner',
                 '.modal-overlay',
-                '.popup-overlay'
+                '.popup-overlay',
+                '[role="dialog"]',
+                '.notice-banner'
             ];
             
             for (const overlaySelector of overlaySelectors) {
@@ -195,10 +245,10 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks, s
                     const overlay = await page.locator(overlaySelector).first();
                     if (await overlay.isVisible()) {
                         log.info(`Found overlay with selector: ${overlaySelector}, attempting to close`);
-                        const closeButton = overlay.locator('button, [role="button"]').first();
+                        const closeButton = overlay.locator('button, [role="button"], .close, .dismiss').first();
                         if (await closeButton.isVisible()) {
                             await closeButton.click();
-                            await page.waitForTimeout(2000);
+                            await page.waitForTimeout(3000);
                         }
                     }
                 } catch (error) {
@@ -456,7 +506,7 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks, s
                 log.info(`Navigating to page ${currentPage}`);
                 
                 // Add delay before navigating to next page
-                await page.waitForTimeout(Math.random() * 5000 + 3000);
+                await page.waitForTimeout(Math.random() * 8000 + 5000);
                 
                 log.info('Attempting to enqueue next page link');
                 await enqueueLinks({
