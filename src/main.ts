@@ -97,11 +97,39 @@ try {
                 headless: true,
                 proxy: await proxyConfiguration?.newUrl(),
                 geoip: true,
+                // Enhanced stealth options
+                args: [
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-accelerated-2d-canvas',
+                    '--no-first-run',
+                    '--no-zygote',
+                    '--disable-gpu',
+                    '--disable-background-timer-throttling',
+                    '--disable-backgrounding-occluded-windows',
+                    '--disable-renderer-backgrounding',
+                    '--disable-features=TranslateUI',
+                    '--disable-ipc-flooding-protection',
+                ],
             }),
         },
-        // Add delays to be respectful to the target site
+        // Enhanced settings for stealth
         maxConcurrency: 1,
-        requestHandlerTimeoutSecs: 60,
+        requestHandlerTimeoutSecs: 120, // Increased timeout
+        navigationTimeoutSecs: 60,
+        // Add session pool for better request management
+        sessionPoolOptions: {
+            maxPoolSize: 10,
+            sessionOptions: {
+                maxUsageCount: 50,
+            },
+        },
+        // Add retry logic
+        maxRequestRetries: 5,
+        // Add delays between requests
+        minConcurrency: 1,
+        maxConcurrency: 1,
     });
 
     await crawler.run(startUrls);
@@ -115,17 +143,15 @@ try {
 
     console.log(`Total gigs retrieved from dataset: ${gigs.length}`);
 
-    // TEMPORARILY DISABLED: Apply review count filters for debugging
-    // const filteredGigs = gigs.filter((gig: Gig) => {
-    //     const reviewCount = gig.reviewCount || 0;
-    //     if (reviewCount < minReviews) return false;
-    //     if (maxReviews && reviewCount > maxReviews) return false;
-    //     return true;
-    // });
+    // Apply review count filters
+    const filteredGigs = gigs.filter((gig: Gig) => {
+        const reviewCount = gig.reviewCount || 0;
+        if (reviewCount < minReviews) return false;
+        if (maxReviews && reviewCount > maxReviews) return false;
+        return true;
+    });
 
-    // For debugging, use all gigs without filtering
-    const filteredGigs = gigs;
-    console.log(`Gigs after filtering (currently disabled): ${filteredGigs.length}`);
+    console.log(`Gigs after filtering: ${filteredGigs.length}`);
 
     // Debug: Log details of first few gigs
     if (filteredGigs.length > 0) {
@@ -145,7 +171,7 @@ try {
         gigs: filteredGigs,
         totalResults: filteredGigs.length,
         success: true,
-        message: `Successfully scraped ${filteredGigs.length} gigs for keyword "${keyword}" (filtering temporarily disabled for debugging)`
+        message: `Successfully scraped ${filteredGigs.length} gigs for keyword "${keyword}"`
     };
 
     console.log(`Scraping completed successfully. Found ${filteredGigs.length} gigs.`);

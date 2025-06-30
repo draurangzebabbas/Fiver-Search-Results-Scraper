@@ -26,7 +26,7 @@ interface InputParams {
 
 let currentPage = 1;
 
-router.addHandler('search_results', async ({ request, page, log, enqueueLinks }) => {
+router.addHandler('search_results', async ({ request, page, log, enqueueLinks, session }) => {
     try {
         log.info(`Processing search results page: ${currentPage}`, { url: request.loadedUrl });
 
@@ -34,18 +34,115 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks })
         const inputParams = await Actor.getValue('INPUT_PARAMS') as InputParams;
         log.info(`Input parameters:`, inputParams);
         
-        // Wait for the page to load completely
-        await page.waitForLoadState('networkidle');
-        await page.waitForTimeout(2000); // Additional wait for dynamic content
+        // Enhanced stealth measures
+        await page.addInitScript(() => {
+            // Remove webdriver property
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined,
+            });
 
-        // Debug: Take a screenshot to see what the page looks like
+            // Mock plugins
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [1, 2, 3, 4, 5],
+            });
+
+            // Mock languages
+            Object.defineProperty(navigator, 'languages', {
+                get: () => ['en-US', 'en'],
+            });
+
+            // Mock permissions
+            const originalQuery = window.navigator.permissions.query;
+            window.navigator.permissions.query = (parameters) => (
+                parameters.name === 'notifications' ?
+                    Promise.resolve({ state: Notification.permission }) :
+                    originalQuery(parameters)
+            );
+
+            // Mock chrome object
+            window.chrome = {
+                runtime: {},
+            };
+        });
+
+        // Set realistic headers
+        await page.setExtraHTTPHeaders({
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Cache-Control': 'max-age=0',
+        });
+
+        // Set viewport to common desktop size
+        await page.setViewportSize({ width: 1366, height: 768 });
+
+        // Navigate with realistic user behavior
+        log.info(`Navigating to: ${request.url}`);
+        
+        // Add random delay before navigation
+        await page.waitForTimeout(Math.random() * 3000 + 2000);
+        
+        try {
+            // Wait for page to load with increased timeout
+            await page.waitForLoadState('domcontentloaded', { timeout: 60000 });
+            log.info('Page DOM content loaded');
+            
+            // Wait for network to be idle
+            await page.waitForLoadState('networkidle', { timeout: 30000 });
+            log.info('Page network idle');
+            
+        } catch (loadError) {
+            log.warning(`Load state timeout, continuing anyway: ${loadError}`);
+        }
+
+        // Additional wait for dynamic content
+        await page.waitForTimeout(5000);
+
+        // Check if we're blocked or redirected
+        const currentUrl = page.url();
+        const pageTitle = await page.title();
+        log.info(`Current URL: ${currentUrl}`);
+        log.info(`Page title: ${pageTitle}`);
+
+        // Check for common blocking indicators
+        const bodyText = await page.evaluate(() => document.body.innerText.toLowerCase());
+        const blockingKeywords = ['blocked', 'access denied', 'forbidden', 'captcha', 'security check'];
+        const isBlocked = blockingKeywords.some(keyword => bodyText.includes(keyword));
+        
+        if (isBlocked) {
+            log.warning('Page appears to be blocked, marking session as bad');
+            session?.markBad();
+            throw new Error('Page blocked by anti-bot protection');
+        }
+
+        // Take screenshot for debugging
         await page.screenshot({ path: `debug-page-${currentPage}.png`, fullPage: true });
         log.info(`Screenshot saved as debug-page-${currentPage}.png`);
 
-        // Debug: Log the page title and URL
-        const pageTitle = await page.title();
-        log.info(`Page title: ${pageTitle}`);
-        log.info(`Current URL: ${page.url()}`);
+        // Simulate human-like scrolling
+        await page.evaluate(async () => {
+            await new Promise((resolve) => {
+                let totalHeight = 0;
+                const distance = 100;
+                const timer = setInterval(() => {
+                    const scrollHeight = document.body.scrollHeight;
+                    window.scrollBy(0, distance);
+                    totalHeight += distance;
+
+                    if(totalHeight >= scrollHeight){
+                        clearInterval(timer);
+                        resolve(null);
+                    }
+                }, 100);
+            });
+        });
 
         // Wait for gig listings to appear with multiple selectors
         const possibleSelectors = [
@@ -54,16 +151,25 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks })
             '.gig-wrapper',
             '.gig-card',
             '[data-impression-collected]',
-            '.basic-gig-card'
+            '.basic-gig-card',
+            '.gig-card-footer-wrapper',
+            '[data-testid="gig-card"]',
+            '.gig-card-container'
         ];
 
         let gigElementsFound = false;
+        let workingSelector = '';
+        
         for (const selector of possibleSelectors) {
             try {
-                await page.waitForSelector(selector, { timeout: 5000 });
-                log.info(`Found elements with selector: ${selector}`);
-                gigElementsFound = true;
-                break;
+                await page.waitForSelector(selector, { timeout: 10000 });
+                const elementCount = await page.locator(selector).count();
+                if (elementCount > 0) {
+                    log.info(`Found ${elementCount} elements with selector: ${selector}`);
+                    gigElementsFound = true;
+                    workingSelector = selector;
+                    break;
+                }
             } catch (error) {
                 log.info(`Selector ${selector} not found, trying next...`);
             }
@@ -71,60 +177,67 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks })
 
         if (!gigElementsFound) {
             log.warning('No gig listings found with any of the expected selectors');
-            // Debug: Log the page content to see what's actually there
-            const bodyText = await page.evaluate(() => document.body.innerText.substring(0, 1000));
-            log.info(`Page body content (first 1000 chars): ${bodyText}`);
-        }
-
-        // Extract gig data from the current page with enhanced logging
-        const gigs = await page.evaluate(() => {
-            console.log('Starting gig extraction...');
+            // Log page content for debugging
+            const bodyText = await page.evaluate(() => document.body.innerText.substring(0, 2000));
+            log.info(`Page body content (first 2000 chars): ${bodyText}`);
             
-            // Try multiple selectors for gig elements
-            const selectors = [
-                '[data-gig-id]',
-                '.gig-card-layout', 
-                '.gig-wrapper',
-                '.gig-card',
-                '[data-impression-collected]',
-                '.basic-gig-card',
-                '.gig-card-footer-wrapper'
+            // Check if we need to handle cookie consent or other overlays
+            const overlaySelectors = [
+                '[data-testid="cookie-banner"]',
+                '.cookie-consent',
+                '.gdpr-banner',
+                '.modal-overlay',
+                '.popup-overlay'
             ];
             
-            let gigElements: NodeListOf<Element> | null = null;
-            let usedSelector = '';
-            
-            for (const selector of selectors) {
-                gigElements = document.querySelectorAll(selector);
-                if (gigElements.length > 0) {
-                    usedSelector = selector;
-                    console.log(`Found ${gigElements.length} elements with selector: ${selector}`);
-                    break;
+            for (const overlaySelector of overlaySelectors) {
+                try {
+                    const overlay = await page.locator(overlaySelector).first();
+                    if (await overlay.isVisible()) {
+                        log.info(`Found overlay with selector: ${overlaySelector}, attempting to close`);
+                        const closeButton = overlay.locator('button, [role="button"]').first();
+                        if (await closeButton.isVisible()) {
+                            await closeButton.click();
+                            await page.waitForTimeout(2000);
+                        }
+                    }
+                } catch (error) {
+                    // Ignore overlay handling errors
                 }
             }
+        }
+
+        // Extract gig data from the current page with enhanced error handling
+        const gigs = await page.evaluate((selector) => {
+            console.log('Starting gig extraction with selector:', selector);
             
-            if (!gigElements || gigElements.length === 0) {
-                console.log('No gig elements found with any selector');
-                console.log('Available elements on page:', document.querySelectorAll('*').length);
-                return [];
+            const gigElements = document.querySelectorAll(selector || '[data-gig-id], .gig-card-layout, .gig-wrapper, .gig-card');
+            console.log(`Found ${gigElements.length} gig elements`);
+            
+            if (gigElements.length === 0) {
+                // Try alternative extraction methods
+                const allLinks = document.querySelectorAll('a[href*="/gigs/"]');
+                console.log(`Found ${allLinks.length} gig links as fallback`);
+                
+                if (allLinks.length === 0) {
+                    return [];
+                }
             }
 
-            console.log(`Using selector: ${usedSelector}, found ${gigElements.length} elements`);
             const extractedGigs: any[] = [];
 
             gigElements.forEach((gigElement, index) => {
                 try {
-                    console.log(`Processing gig element ${index + 1}/${gigElements!.length}`);
+                    console.log(`Processing gig element ${index + 1}/${gigElements.length}`);
                     
-                    // Try multiple selectors for title
+                    // Enhanced title extraction
                     const titleSelectors = [
-                        'h3 a',
+                        'h3 a', 'h2 a', 'h4 a',
                         '.gig-title a',
                         '[data-gig-title] a',
                         'a[data-impression-collected]',
                         '.gig-link',
-                        'h2 a',
-                        'h4 a'
+                        'a[href*="/gigs/"]'
                     ];
                     
                     let titleElement: Element | null = null;
@@ -148,34 +261,39 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks })
                         return;
                     }
                     
-                    // Try multiple selectors for rating
+                    // Enhanced rating extraction
                     const ratingSelectors = [
-                        '.rating-score',
-                        '[data-rating]',
-                        '.gig-rating',
+                        '.rating-score', '.star-rating-score',
+                        '[data-rating]', '.gig-rating',
                         '.rating-wrapper span',
-                        '.star-rating-score'
+                        '.rating span',
+                        '[aria-label*="star"]'
                     ];
                     
                     let rating = 0;
                     for (const selector of ratingSelectors) {
                         const ratingElement = gigElement.querySelector(selector);
                         if (ratingElement) {
-                            const ratingText = ratingElement.textContent?.trim() || '0';
-                            rating = parseFloat(ratingText) || 0;
-                            if (rating > 0) {
-                                console.log(`Found rating: ${rating}`);
-                                break;
+                            const ratingText = ratingElement.textContent?.trim() || 
+                                             ratingElement.getAttribute('aria-label') || '0';
+                            const ratingMatch = ratingText.match(/(\d+\.?\d*)/);
+                            if (ratingMatch) {
+                                rating = parseFloat(ratingMatch[1]) || 0;
+                                if (rating > 0) {
+                                    console.log(`Found rating: ${rating}`);
+                                    break;
+                                }
                             }
                         }
                     }
                     
-                    // Try multiple selectors for review count
+                    // Enhanced review count extraction
                     const reviewSelectors = [
-                        '.rating-count',
+                        '.rating-count', '.reviews-count',
                         '[data-reviews-count]',
-                        '.reviews-count',
-                        '.rating-wrapper .count'
+                        '.rating-wrapper .count',
+                        '.review-count',
+                        '[class*="review"]'
                     ];
                     
                     let reviewCount = 0;
@@ -183,21 +301,23 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks })
                         const reviewElement = gigElement.querySelector(selector);
                         if (reviewElement) {
                             const reviewText = reviewElement.textContent?.trim() || '0';
-                            reviewCount = parseInt(reviewText.replace(/[^\d]/g, '')) || 0;
-                            if (reviewCount > 0) {
-                                console.log(`Found review count: ${reviewCount}`);
-                                break;
+                            const reviewMatch = reviewText.match(/(\d+)/);
+                            if (reviewMatch) {
+                                reviewCount = parseInt(reviewMatch[1]) || 0;
+                                if (reviewCount > 0) {
+                                    console.log(`Found review count: ${reviewCount}`);
+                                    break;
+                                }
                             }
                         }
                     }
 
-                    // Try multiple selectors for price
+                    // Enhanced price extraction
                     const priceSelectors = [
-                        '.price',
-                        '[data-price]',
-                        '.gig-price',
-                        '.price-wrapper',
-                        '.starting-at'
+                        '.price', '.gig-price',
+                        '[data-price]', '.price-wrapper',
+                        '.starting-at', '.price-display',
+                        '[class*="price"]'
                     ];
                     
                     let price = '';
@@ -205,19 +325,18 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks })
                         const priceElement = gigElement.querySelector(selector);
                         if (priceElement) {
                             price = priceElement.textContent?.trim() || '';
-                            if (price) {
+                            if (price && (price.includes('$') || price.includes('€') || price.includes('£'))) {
                                 console.log(`Found price: ${price}`);
                                 break;
                             }
                         }
                     }
 
-                    // Try multiple selectors for seller
+                    // Enhanced seller extraction
                     const sellerSelectors = [
-                        '.seller-name',
-                        '[data-seller]',
-                        '.username',
-                        '.seller-info .name'
+                        '.seller-name', '.username',
+                        '[data-seller]', '.seller-info .name',
+                        '.seller-link', '[class*="seller"]'
                     ];
                     
                     let seller = '';
@@ -232,18 +351,20 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks })
                         }
                     }
                     
-                    const sellerLevelElement = gigElement.querySelector('.seller-level, [data-seller-level]');
+                    const sellerLevelElement = gigElement.querySelector('.seller-level, [data-seller-level], [class*="level"]');
                     const sellerLevel = sellerLevelElement?.textContent?.trim() || '';
 
                     // Extract thumbnail
                     const thumbnailElement = gigElement.querySelector('img');
-                    const thumbnail = thumbnailElement?.getAttribute('src') || thumbnailElement?.getAttribute('data-src') || '';
+                    const thumbnail = thumbnailElement?.getAttribute('src') || 
+                                    thumbnailElement?.getAttribute('data-src') || 
+                                    thumbnailElement?.getAttribute('data-lazy-src') || '';
 
-                    // Extract tags (if available)
-                    const tagElements = gigElement.querySelectorAll('.tag, .gig-tag, [data-tag]');
+                    // Extract tags
+                    const tagElements = gigElement.querySelectorAll('.tag, .gig-tag, [data-tag], [class*="tag"]');
                     const tags = Array.from(tagElements).map(tag => tag.textContent?.trim() || '').filter(Boolean);
 
-                    // Generate ID from data attribute or create one
+                    // Generate ID
                     const id = gigElement.getAttribute('data-gig-id') || 
                               gigElement.getAttribute('data-gig') || 
                               `gig-${Date.now()}-${index}`;
@@ -277,7 +398,7 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks })
 
             console.log(`Total extracted gigs: ${extractedGigs.length}`);
             return extractedGigs;
-        });
+        }, workingSelector);
 
         log.info(`Extracted ${gigs.length} gigs from page ${currentPage}`);
         
@@ -308,11 +429,11 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks })
             // Look for next page link with multiple selectors
             const nextPageExists = await page.evaluate(() => {
                 const nextSelectors = [
-                    '.pagination-next',
-                    '[aria-label="Next"]',
-                    '.next-page',
-                    '.pagination .next',
-                    'a[aria-label="Go to next page"]'
+                    '.pagination-next:not([disabled]):not(.disabled)',
+                    '[aria-label="Next"]:not([disabled]):not(.disabled)',
+                    '.next-page:not([disabled]):not(.disabled)',
+                    '.pagination .next:not([disabled]):not(.disabled)',
+                    'a[aria-label="Go to next page"]:not([disabled]):not(.disabled)'
                 ];
                 
                 for (const selector of nextSelectors) {
@@ -335,11 +456,11 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks })
                 log.info(`Navigating to page ${currentPage}`);
                 
                 // Add delay before navigating to next page
-                await page.waitForTimeout(3000);
+                await page.waitForTimeout(Math.random() * 5000 + 3000);
                 
                 log.info('Attempting to enqueue next page link');
                 await enqueueLinks({
-                    selector: '.pagination-next, [aria-label="Next"], .next-page, .pagination .next, a[aria-label="Go to next page"]',
+                    selector: '.pagination-next:not([disabled]):not(.disabled), [aria-label="Next"]:not([disabled]):not(.disabled), .next-page:not([disabled]):not(.disabled), .pagination .next:not([disabled]):not(.disabled), a[aria-label="Go to next page"]:not([disabled]):not(.disabled)',
                     label: 'search_results',
                 });
                 log.info('Successfully enqueued next page link');
@@ -364,5 +485,8 @@ router.addDefaultHandler(async ({ request, log }) => {
     log.info(`Processing default handler for: ${request.url}`);
     // This might catch any redirects or unexpected URLs
     // We'll treat them as search results pages
-    await router.getHandler('search_results')?.({ request } as any);
+    const handler = router.getHandler('search_results');
+    if (handler) {
+        await handler({ request } as any);
+    }
 });
