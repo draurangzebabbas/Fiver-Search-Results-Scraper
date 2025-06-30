@@ -259,15 +259,17 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks, s
 
         // Extract gig data from the current page with enhanced error handling and validation
         const gigs = await page.evaluate((selector, keyword) => {
+            console.log('=== STARTING GIG EXTRACTION DEBUG ===');
             console.log('Starting gig extraction with selector:', selector);
+            console.log('Keyword:', keyword);
             
             // Helper function to clean text (from Supabase function)
             function cleanText(text: string): string {
                 return text
-                    .replace(/&amp;/g, '&')
-                    .replace(/&lt;/g, '<')
-                    .replace(/&gt;/g, '>')
-                    .replace(/&quot;/g, '"')
+                    .replace(/&/g, '&')
+                    .replace(/</g, '<')
+                    .replace(/>/g, '>')
+                    .replace(/"/g, '"')
                     .replace(/&#39;/g, "'")
                     .replace(/\s+/g, ' ')
                     .trim();
@@ -292,11 +294,13 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks, s
             console.log(`Found ${gigElements.length} gig elements`);
             
             if (gigElements.length === 0) {
+                console.log('No gig elements found, trying alternative extraction methods');
                 // Try alternative extraction methods
                 const allLinks = document.querySelectorAll('a[href*="/gigs/"]');
                 console.log(`Found ${allLinks.length} gig links as fallback`);
                 
                 if (allLinks.length === 0) {
+                    console.log('No gig links found either, returning empty array');
                     return [];
                 }
             }
@@ -305,7 +309,7 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks, s
 
             gigElements.forEach((gigElement, index) => {
                 try {
-                    console.log(`Processing gig element ${index + 1}/${gigElements.length}`);
+                    console.log(`\n=== PROCESSING GIG ELEMENT ${index + 1}/${gigElements.length} ===`);
                     
                     // Enhanced title extraction with multiple patterns (from Supabase function)
                     const titleSelectors = [
@@ -324,23 +328,28 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks, s
                     
                     // Try data attribute first
                     const dataTitle = gigElement.getAttribute('data-impression-gig-title');
+                    console.log(`Data title attribute: "${dataTitle}"`);
                     if (dataTitle && dataTitle.trim().length > 5) {
                         title = cleanText(dataTitle);
-                        console.log(`Found title from data attribute: ${title.substring(0, 50)}...`);
+                        console.log(`Found title from data attribute: "${title}"`);
                     }
                     
                     // If no data title, try selectors
                     if (!title) {
-                        for (const selector of titleSelectors) {
-                            titleElement = gigElement.querySelector(selector);
+                        console.log('No data title found, trying selectors...');
+                        for (const titleSelector of titleSelectors) {
+                            titleElement = gigElement.querySelector(titleSelector);
                             if (titleElement) {
                                 title = titleElement.textContent?.trim() || '';
                                 link = titleElement.getAttribute('href') || '';
+                                console.log(`Selector "${titleSelector}" found element with title: "${title}" and link: "${link}"`);
                                 if (title && title.length > 5) {
                                     title = cleanText(title);
-                                    console.log(`Found title with selector ${selector}: ${title.substring(0, 50)}...`);
+                                    console.log(`Cleaned title: "${title}"`);
                                     break;
                                 }
+                            } else {
+                                console.log(`Selector "${titleSelector}" found no element`);
                             }
                         }
                     }
@@ -348,19 +357,25 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks, s
                     // Extract link if not found yet
                     if (!link && titleElement) {
                         link = titleElement.getAttribute('href') || '';
+                        console.log(`Extracted link from title element: "${link}"`);
                     }
                     
                     // Try to find link separately if still not found
                     if (!link) {
+                        console.log('No link found yet, trying separate link extraction...');
                         const linkElement = gigElement.querySelector('a[href*="/gigs/"]');
                         if (linkElement) {
                             link = linkElement.getAttribute('href') || '';
+                            console.log(`Found link from separate search: "${link}"`);
                         }
                     }
                     
+                    console.log(`TITLE CHECK: title="${title}", length=${title.length}, valid=${title && title.length >= 5}`);
+                    console.log(`LINK CHECK: link="${link}", valid=${!!link}`);
+                    
                     // Strict validation: Skip if no title or link (from Supabase function logic)
                     if (!title || title.length < 5 || !link) {
-                        console.log(`No valid title/link found for element ${index}, skipping`);
+                        console.log(`❌ SKIPPING ELEMENT ${index}: No valid title/link. Title: "${title}" (length: ${title.length}), Link: "${link}"`);
                         return;
                     }
                     
@@ -376,27 +391,38 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks, s
                     ];
                     
                     let rating = 0;
+                    console.log('Trying to extract rating...');
                     for (const ratingSelector of ratingSelectors) {
                         const ratingElement = gigElement.querySelector(ratingSelector);
                         if (ratingElement) {
                             const ratingText = ratingElement.textContent?.trim() || 
                                              ratingElement.getAttribute('aria-label') || 
                                              ratingElement.getAttribute('data-rating') || '0';
+                            console.log(`Rating selector "${ratingSelector}" found text: "${ratingText}"`);
                             const ratingMatch = ratingText.match(/(\d+\.?\d*)/);
                             if (ratingMatch) {
                                 const parsedRating = parseFloat(ratingMatch[1]);
+                                console.log(`Parsed rating: ${parsedRating}`);
                                 if (parsedRating >= 1 && parsedRating <= 5) {
                                     rating = Math.round(parsedRating * 10) / 10;
-                                    console.log(`Found rating: ${rating}`);
+                                    console.log(`Valid rating found: ${rating}`);
                                     break;
+                                } else {
+                                    console.log(`Rating ${parsedRating} is out of valid range (1-5)`);
                                 }
+                            } else {
+                                console.log(`No rating number found in text: "${ratingText}"`);
                             }
+                        } else {
+                            console.log(`Rating selector "${ratingSelector}" found no element`);
                         }
                     }
                     
+                    console.log(`RATING CHECK: rating=${rating}, valid=${rating > 0}`);
+                    
                     // Strict validation: Skip if no valid rating (from Supabase function logic)
                     if (rating === 0) {
-                        console.log(`No valid rating found for element ${index}, skipping`);
+                        console.log(`❌ SKIPPING ELEMENT ${index}: No valid rating found. Rating: ${rating}`);
                         return;
                     }
                     
@@ -411,26 +437,37 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks, s
                     ];
                     
                     let reviewCount = 0;
+                    console.log('Trying to extract review count...');
                     for (const reviewSelector of reviewSelectors) {
                         const reviewElement = gigElement.querySelector(reviewSelector);
                         if (reviewElement) {
                             const reviewText = reviewElement.textContent?.trim() || '0';
+                            console.log(`Review selector "${reviewSelector}" found text: "${reviewText}"`);
                             // Look for patterns like "(123)" or "123 reviews"
                             const reviewMatch = reviewText.match(/\(?(\d+)\)?/);
                             if (reviewMatch) {
                                 const parsedCount = parseInt(reviewMatch[1]);
+                                console.log(`Parsed review count: ${parsedCount}`);
                                 if (parsedCount > 0 && parsedCount < 50000) { // Reasonable upper limit
                                     reviewCount = parsedCount;
-                                    console.log(`Found review count: ${reviewCount}`);
+                                    console.log(`Valid review count found: ${reviewCount}`);
                                     break;
+                                } else {
+                                    console.log(`Review count ${parsedCount} is out of valid range (1-50000)`);
                                 }
+                            } else {
+                                console.log(`No review number found in text: "${reviewText}"`);
                             }
+                        } else {
+                            console.log(`Review selector "${reviewSelector}" found no element`);
                         }
                     }
 
+                    console.log(`REVIEW COUNT CHECK: reviewCount=${reviewCount}, valid=${reviewCount > 0}`);
+
                     // Strict validation: Skip if no valid review count (from Supabase function logic)
                     if (reviewCount === 0) {
-                        console.log(`No valid review count found for element ${index}, skipping`);
+                        console.log(`❌ SKIPPING ELEMENT ${index}: No valid review count found. Review count: ${reviewCount}`);
                         return;
                     }
 
@@ -444,28 +481,41 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks, s
                     ];
                     
                     let price = '';
+                    console.log('Trying to extract price...');
                     for (const priceSelector of priceSelectors) {
                         const priceElement = gigElement.querySelector(priceSelector);
                         if (priceElement) {
                             const priceText = priceElement.textContent?.trim() || '';
+                            console.log(`Price selector "${priceSelector}" found text: "${priceText}"`);
                             if (priceText && (priceText.includes('$') || priceText.includes('€') || priceText.includes('£'))) {
                                 // Extract price number and validate
                                 const priceMatch = priceText.match(/[\$€£](\d+)/);
                                 if (priceMatch) {
                                     const priceNum = parseInt(priceMatch[1]);
+                                    console.log(`Parsed price number: ${priceNum}`);
                                     if (priceNum > 0 && priceNum < 10000) { // Reasonable price range
                                         price = priceText.includes('From') ? priceText : `From ${priceText}`;
-                                        console.log(`Found price: ${price}`);
+                                        console.log(`Valid price found: "${price}"`);
                                         break;
+                                    } else {
+                                        console.log(`Price ${priceNum} is out of valid range (1-10000)`);
                                     }
+                                } else {
+                                    console.log(`No price number found in text: "${priceText}"`);
                                 }
+                            } else {
+                                console.log(`Price text doesn't contain currency symbols: "${priceText}"`);
                             }
+                        } else {
+                            console.log(`Price selector "${priceSelector}" found no element`);
                         }
                     }
 
+                    console.log(`PRICE CHECK: price="${price}", valid=${!!price}`);
+
                     // Strict validation: Skip if no valid price (from Supabase function logic)
                     if (!price) {
-                        console.log(`No valid price found for element ${index}, skipping`);
+                        console.log(`❌ SKIPPING ELEMENT ${index}: No valid price found. Price: "${price}"`);
                         return;
                     }
 
@@ -478,21 +528,29 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks, s
                     ];
                     
                     let seller = '';
+                    console.log('Trying to extract seller...');
                     for (const sellerSelector of sellerSelectors) {
                         const sellerElement = gigElement.querySelector(sellerSelector);
                         if (sellerElement) {
                             const sellerText = sellerElement.textContent?.trim() || '';
+                            console.log(`Seller selector "${sellerSelector}" found text: "${sellerText}"`);
                             if (sellerText && sellerText.length > 1 && sellerText.length < 50) {
                                 seller = cleanText(sellerText);
-                                console.log(`Found seller: ${seller}`);
+                                console.log(`Valid seller found: "${seller}"`);
                                 break;
+                            } else {
+                                console.log(`Seller text invalid length: "${sellerText}" (length: ${sellerText.length})`);
                             }
+                        } else {
+                            console.log(`Seller selector "${sellerSelector}" found no element`);
                         }
                     }
                     
+                    console.log(`SELLER CHECK: seller="${seller}", valid=${!!seller}`);
+                    
                     // Strict validation: Skip if no valid seller (from Supabase function logic)
                     if (!seller) {
-                        console.log(`No valid seller found for element ${index}, skipping`);
+                        console.log(`❌ SKIPPING ELEMENT ${index}: No valid seller found. Seller: "${seller}"`);
                         return;
                     }
                     
@@ -504,16 +562,22 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks, s
                     ];
                     
                     let sellerLevel = 'Level 1'; // Default fallback
+                    console.log('Trying to extract seller level...');
                     for (const levelSelector of levelSelectors) {
                         const levelElement = gigElement.querySelector(levelSelector);
                         if (levelElement) {
                             const levelText = levelElement.textContent?.trim() || '';
+                            console.log(`Level selector "${levelSelector}" found text: "${levelText}"`);
                             if (levelText && (levelText.includes('Level') || levelText.includes('Pro') || levelText.includes('Top'))) {
                                 sellerLevel = cleanText(levelText);
+                                console.log(`Valid seller level found: "${sellerLevel}"`);
                                 break;
                             }
+                        } else {
+                            console.log(`Level selector "${levelSelector}" found no element`);
                         }
                     }
+                    console.log(`Using seller level: "${sellerLevel}"`);
 
                     // Enhanced thumbnail extraction with validation (from Supabase function)
                     const imgSelectors = [
@@ -524,6 +588,7 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks, s
                     ];
                     
                     let thumbnail = '';
+                    console.log('Trying to extract thumbnail...');
                     for (const imgSelector of imgSelectors) {
                         const imgElement = gigElement.querySelector(imgSelector);
                         if (imgElement) {
@@ -531,25 +596,34 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks, s
                                         imgElement.getAttribute('data-src') || 
                                         imgElement.getAttribute('data-lazy-src') || '';
                             
+                            console.log(`Image selector "${imgSelector}" found URL: "${imgUrl}"`);
+                            
                             // Try background image if no src found
                             if (!imgUrl && imgElement.getAttribute('style')) {
                                 const styleMatch = imgElement.getAttribute('style')?.match(/background-image:\s*url\(['"]?([^'"]+)['"]?\)/);
                                 if (styleMatch) {
                                     imgUrl = styleMatch[1];
+                                    console.log(`Found background image URL: "${imgUrl}"`);
                                 }
                             }
                             
                             if (imgUrl && (imgUrl.startsWith('http') || imgUrl.startsWith('//'))) {
                                 thumbnail = imgUrl.startsWith('http') ? imgUrl : `https:${imgUrl}`;
-                                console.log(`Found thumbnail: ${thumbnail.substring(0, 50)}...`);
+                                console.log(`Valid thumbnail found: "${thumbnail}"`);
                                 break;
+                            } else {
+                                console.log(`Invalid image URL: "${imgUrl}"`);
                             }
+                        } else {
+                            console.log(`Image selector "${imgSelector}" found no element`);
                         }
                     }
 
+                    console.log(`THUMBNAIL CHECK: thumbnail="${thumbnail}", valid=${!!thumbnail}`);
+
                     // Strict validation: Skip if no valid thumbnail (from Supabase function logic)
                     if (!thumbnail) {
-                        console.log(`No valid thumbnail found for element ${index}, skipping`);
+                        console.log(`❌ SKIPPING ELEMENT ${index}: No valid thumbnail found. Thumbnail: "${thumbnail}"`);
                         return;
                     }
 
@@ -561,15 +635,17 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks, s
                     // Generate tags using the helper function
                     const tags = generateTags(title, keyword);
 
-                    console.log(`Successfully extracted gig data:`, {
-                        title: title.substring(0, 30) + '...',
-                        link: link.substring(0, 50) + '...',
-                        rating,
-                        reviewCount,
-                        price,
-                        seller,
-                        thumbnail: thumbnail.substring(0, 30) + '...'
-                    });
+                    console.log(`✅ SUCCESSFULLY EXTRACTED GIG ${index}:`);
+                    console.log(`  - ID: ${gigId}`);
+                    console.log(`  - Title: "${title}"`);
+                    console.log(`  - Link: "${link}"`);
+                    console.log(`  - Rating: ${rating}`);
+                    console.log(`  - Review Count: ${reviewCount}`);
+                    console.log(`  - Price: "${price}"`);
+                    console.log(`  - Seller: "${seller}"`);
+                    console.log(`  - Seller Level: "${sellerLevel}"`);
+                    console.log(`  - Thumbnail: "${thumbnail}"`);
+                    console.log(`  - Tags: [${tags.join(', ')}]`);
 
                     extractedGigs.push({
                         id: gigId,
@@ -585,11 +661,13 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks, s
                     });
                     
                 } catch (error) {
-                    console.log(`Error extracting gig data for element ${index}:`, error);
+                    console.log(`❌ ERROR extracting gig data for element ${index}:`, error);
                 }
             });
 
+            console.log(`\n=== EXTRACTION COMPLETE ===`);
             console.log(`Total extracted gigs: ${extractedGigs.length}`);
+            console.log('=== END GIG EXTRACTION DEBUG ===\n');
             return extractedGigs;
         }, workingSelector, inputParams.keyword);
 
