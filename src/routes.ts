@@ -351,7 +351,10 @@ router.addHandler('search_results', async ({ request, page, log, enqueueLinks })
         }
 
     } catch (error) {
-        log.error('Error processing search results page:', error);
+        log.error('Error processing search results page:', { 
+            error: error instanceof Error ? error.message : 'Unknown error',
+            stack: error instanceof Error ? error.stack : undefined
+        });
         throw error;
     }
 });

@@ -108,7 +108,10 @@ try {
 
     // Retrieve scraped data from dataset
     const dataset = await Dataset.open();
-    const { items: gigs } = await dataset.getData();
+    const { items } = await dataset.getData();
+    
+    // Cast the items to Gig[] type since we know the structure from our scraping
+    const gigs = items as Gig[];
 
     console.log(`Total gigs retrieved from dataset: ${gigs.length}`);
 
